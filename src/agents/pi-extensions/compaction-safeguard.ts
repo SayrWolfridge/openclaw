@@ -1216,6 +1216,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
+  trimToolResultsForSummarization,
+  restoreOriginalToolResultsForKeptMessages,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
