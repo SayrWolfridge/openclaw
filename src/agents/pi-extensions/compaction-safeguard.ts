@@ -939,6 +939,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       const prefixTrimmedForBudget = trimToolResultsForSummarization(turnPrefixMessages);
+      if (
+        prefixTrimmedForBudget.stats.truncatedCount > 0 ||
+        prefixTrimmedForBudget.stats.compactedCount > 0
+      ) {
+        log.warn(
+          `Compaction safeguard: pre-trimmed prefix toolResult payloads for budgeting ` +
+            `(truncated=${prefixTrimmedForBudget.stats.truncatedCount}, compacted=${prefixTrimmedForBudget.stats.compactedCount}, ` +
+            `chars=${prefixTrimmedForBudget.stats.beforeChars}->${prefixTrimmedForBudget.stats.afterChars})`,
+        );
+      }
       const prefixMessagesForSummary = prefixTrimmedForBudget.messages;
       let messagesToSummarize = preparation.messagesToSummarize;
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
@@ -1057,10 +1067,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         ...messagesToSummarize,
         ...prefixMessagesForSummary,
       ]);
-      const identifierSourceMessages = [
-        ...trimToolResultsForSummarization(messagesToSummarize).messages,
-        ...prefixMessagesForSummary,
-      ];
+      const summaryTrimmed = trimToolResultsForSummarization(messagesToSummarize);
+      if (summaryTrimmed.stats.truncatedCount > 0 || summaryTrimmed.stats.compactedCount > 0) {
+        log.warn(
+          `Compaction safeguard: trimmed toolResult payloads before summarize ` +
+            `(truncated=${summaryTrimmed.stats.truncatedCount}, compacted=${summaryTrimmed.stats.compactedCount}, ` +
+            `chars=${summaryTrimmed.stats.beforeChars}->${summaryTrimmed.stats.afterChars})`,
+        );
+      }
+
+      const identifierSourceMessages = [...summaryTrimmed.messages, ...prefixMessagesForSummary];
       const identifierSeedText = identifierSourceMessages
         .slice(-10)
         .map((message) => extractMessageText(message))
@@ -1071,7 +1087,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
       // that generateSummary adds on top of the serialized conversation chunk.
-      const allMessages = [...messagesToSummarize, ...prefixMessagesForSummary];
+      const allMessages = [...summaryTrimmed.messages, ...prefixMessagesForSummary];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(
         1,
@@ -1092,14 +1108,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
         try {
-          const summaryTrimmed = trimToolResultsForSummarization(messagesToSummarize);
-          if (summaryTrimmed.stats.truncatedCount > 0 || summaryTrimmed.stats.compactedCount > 0) {
-            log.warn(
-              `Compaction safeguard: trimmed toolResult payloads before summarize ` +
-                `(truncated=${summaryTrimmed.stats.truncatedCount}, compacted=${summaryTrimmed.stats.compactedCount}, ` +
-                `chars=${summaryTrimmed.stats.beforeChars}->${summaryTrimmed.stats.afterChars})`,
-            );
-          }
           const historySummary =
             summaryTrimmed.messages.length > 0
               ? await summarizeInStages({
