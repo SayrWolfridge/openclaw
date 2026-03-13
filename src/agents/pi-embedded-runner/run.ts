@@ -1302,6 +1302,21 @@ export async function runEmbeddedPiAgent(
               fallbackConfigured,
               aborted,
             });
+            if (promptFailoverReason === "rate_limit") {
+              const status = resolveFailoverStatus(promptFailoverReason) ?? 429;
+              if (fallbackConfigured) {
+                logPromptFailoverDecision("fallback_model", { status });
+                throw new FailoverError(errorText, {
+                  reason: promptFailoverReason,
+                  provider,
+                  model: modelId,
+                  profileId: lastProfileId,
+                  status,
+                });
+              }
+              logPromptFailoverDecision("surface_error", { status });
+              throw promptError;
+            }
             if (
               promptFailoverFailure &&
               promptFailoverReason !== "timeout" &&
@@ -1409,10 +1424,52 @@ export async function runEmbeddedPiAgent(
             );
           }
 
+          if (!aborted && assistantFailoverReason === "rate_limit") {
+            if (lastProfileId) {
+              await maybeMarkAuthProfileFailure({
+                profileId: lastProfileId,
+                reason: assistantProfileFailureReason,
+              });
+            }
+            const status = resolveFailoverStatus(assistantFailoverReason) ?? 429;
+            const message =
+              (lastAssistant
+                ? formatAssistantErrorText(lastAssistant, {
+                    cfg: params.config,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                  })
+                : undefined) ||
+              lastAssistant?.errorMessage?.trim() ||
+              "LLM request rate limited.";
+            if (fallbackConfigured) {
+              logAssistantFailoverDecision("fallback_model", { status });
+              throw new FailoverError(message, {
+                reason: assistantFailoverReason,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+                profileId: lastProfileId,
+                status,
+              });
+            }
+            logAssistantFailoverDecision("surface_error", { status });
+            throw new Error(message);
+          }
+
           // Rotate on timeout to try another account/model path in this turn,
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+
+          let assistantProfileFailureMarked = false;
+          if (!aborted && lastProfileId && assistantProfileFailureReason) {
+            await maybeMarkAuthProfileFailure({
+              profileId: lastProfileId,
+              reason: assistantProfileFailureReason,
+            });
+            assistantProfileFailureMarked = true;
+          }
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -1420,10 +1477,12 @@ export async function runEmbeddedPiAgent(
               // Skip cooldown for timeouts: a timeout is model/network-specific,
               // not an auth issue. Marking the profile would poison fallback models
               // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-              });
+              if (!(assistantProfileFailureMarked && reason === assistantProfileFailureReason)) {
+                await maybeMarkAuthProfileFailure({
+                  profileId: lastProfileId,
+                  reason,
+                });
+              }
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }

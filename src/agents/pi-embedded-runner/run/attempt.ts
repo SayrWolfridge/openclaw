@@ -1762,6 +1762,18 @@ export async function runEmbeddedAttempt(
         agentDir,
         cfg: params.config,
       });
+      if (params.provider === "anthropic") {
+        // For Anthropic 429 storms, do not retry inside the same run.
+        // One failed attempt should immediately bubble to outer fallback logic.
+        settingsManager.applyOverrides({
+          retry: {
+            enabled: false,
+            maxRetries: 0,
+            baseDelayMs: 0,
+            maxDelayMs: 0,
+          },
+        });
+      }
       applyPiAutoCompactionGuard({
         settingsManager,
         contextEngineInfo: params.contextEngine?.info,
