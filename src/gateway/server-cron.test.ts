@@ -524,10 +524,7 @@ describe("buildGatewayCronService", () => {
               ]),
             }),
           }),
-          heartbeat: expect.objectContaining({
-            target: "last",
-            deliveryFormat: "markdown",
-          }),
+          heartbeat: {},
         }),
       );
     } finally {

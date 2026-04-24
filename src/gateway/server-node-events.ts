@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -41,6 +42,23 @@ const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
+const EXEC_EVENT_HEARTBEAT_OVERRIDE = {
+  target: "last",
+  to: undefined,
+  accountId: undefined,
+  isolatedSession: false,
+} as const;
+
+function scopedExecEventWakeOptions(sessionKey: string) {
+  const wakeOptions = { reason: "exec-event", coalesceMs: 0 };
+  if (parseAgentSessionKey(sessionKey)) {
+    return scopedHeartbeatWakeOptions(sessionKey, {
+      ...wakeOptions,
+      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
+    });
+  }
+  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
+}
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
@@ -690,12 +708,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         trusted: false,
       });
       if (queued) {
-        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-        // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(
-          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-        );
+        // Canonical agent/global sessions have stored routing state; synthetic
+        // node-* fallback keys keep legacy heartbeat delivery config.
+        requestHeartbeatNow(scopedExecEventWakeOptions(sessionKey));
       }
       return;
     }
